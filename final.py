@@ -90,13 +90,13 @@ def parse_student_list_to_excel(pdf_path, excel_path):
         # Try to match student data line
         # Pattern: Sr.No Air NeRollNo CETFormNo Name Gender Category QuotaInfo CollegeCode CollegeName
         # Use a more flexible regex that can handle the specific format
-        match = re.match(r'^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+([A-Z\s]+?)\s+([MF])\s+(.*)', line)
-        
+        match = re.match(r'^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\$?[A-Z\s.]+?)\s+([MF])\s+(.*)', line)
+
         if match:
             sr_no, air, neet_roll, cet_form, name, gender, rest_of_line = match.groups()
-            
-            # Clean up the name
-            name = name.strip()
+
+            # Clean up the name; strip $ minority marker if present
+            name = name.lstrip('$').strip()
             rest_of_line = rest_of_line.strip()
             
             # Default values
