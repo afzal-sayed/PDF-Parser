@@ -37,7 +37,7 @@ def parse_right_side(text):
         text = text[:trailing_text.start()].strip()
 
     # Pull trailing parenthesised markers: (Ret.), (EMD), (EMR), (CANC/NJ), etc.
-    status_match = re.search(r'((?:\s*\([A-Za-z./]+\))+)\s*$', text)
+    status_match = re.search(r'((?:\s*\([A-Za-z./ ]+\))+)\s*$', text)
     status = status_match.group(1).strip() if status_match else ""
     if status_match:
         text = text[:status_match.start()].strip()
@@ -89,6 +89,9 @@ def parse_pg_pdf(pdf_path, excel_path):
     except Exception as e:
         print(f"Error reading PDF: {e}")
         return
+
+    # Join multi-line status markers like "(No\n   Pref)" → "(No Pref)"
+    full_text = re.sub(r'\(No\s+(Pref|Change)\)', r'(No \1)', full_text)
 
     lines = full_text.split('\n')
     extracted_data = []
