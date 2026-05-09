@@ -13,7 +13,8 @@ from datetime import datetime
 KNOWN_CATEGORIES = [
     "EWS MIN", "OBC MIN", "SC MIN", "ST MIN", "SEBC MIN",
     "VJA MIN", "NTD MIN", "NTC MIN", "NTB MIN",
-    "OPEN", "OBC", "SC", "ST", "EWS", "SEBC", "NTC", "NTB", "NTD", "VJA", "MIN"
+    "OBC PWD", "SC PWD", "ST PWD", "EWS PWD", "SEBC PWD", "VJA PWD",
+    "OPEN", "OBC", "SC", "ST", "EWS", "SEBC", "NTC", "NTB", "NTD", "VJA", "MIN", "PWD"
 ]
 
 
@@ -29,15 +30,25 @@ def parse_right_side(text):
     """Extract college+location, quota, and status markers from the right portion of a data line."""
     text = text.strip()
 
-    # Pull trailing status markers: (Ret.), (EMD), (EMR), etc.
-    status_match = re.search(r'((?:\s*\([A-Za-z.]+\))+)\s*$', text)
+    # Pull trailing word-based status: Against, Against NRI, NRI (not in parens)
+    trailing_text = re.search(r'\s+(Against(?:\s+NRI)?|NRI)\s*$', text)
+    trailing = trailing_text.group(1).strip() if trailing_text else ""
+    if trailing_text:
+        text = text[:trailing_text.start()].strip()
+
+    # Pull trailing parenthesised markers: (Ret.), (EMD), (EMR), (CANC/NJ), etc.
+    status_match = re.search(r'((?:\s*\([A-Za-z./]+\))+)\s*$', text)
     status = status_match.group(1).strip() if status_match else ""
     if status_match:
         text = text[:status_match.start()].strip()
 
-    # Quota is the last token matching a category or EM-prefixed variant
+    # Combine all trailing markers
+    all_status = " ".join(filter(None, [status, trailing]))
+
+    # Quota: last token matching a known category, I.Q., NRI, ORPHAN, PH, or EM-prefixed variant
     quota_match = re.search(
-        r'\s+((?:EM)?(?:OPEN|OBC|SC|ST|EWS|SEBC|NTC|NTB|NTD|VJA|MIN))\s*$', text
+        r'\s+((?:PH\s+)?(?:EM)?(?:OPEN|OBC|SC|ST|EWS|SEBC|NTC|NTB|NTD|VJA|MIN)|I\.Q\.|NRI|ORPHAN)\s*$',
+        text
     )
     if quota_match:
         quota_base = quota_match.group(1)
@@ -46,7 +57,7 @@ def parse_right_side(text):
         quota_base = "N/A"
         college_loc = text
 
-    quota = (quota_base + " " + status).strip() if status else quota_base
+    quota = (quota_base + " " + all_status).strip() if all_status else quota_base
     return college_loc, quota
 
 
@@ -55,7 +66,7 @@ def parse_pg_pdf(pdf_path, excel_path):
     Extracts student selection data from a Maharashtra NEET PG selection list PDF
     and saves it to an Excel file.
 
-    Columns: Sr. No., SML, Form No., Name, Category, Subject Code, Subject, College, Quota
+    Output columns: Sr. No., SML, Form No., Name, Category, Subject Code, Subject, College, Quota
     """
     if not os.path.exists(pdf_path):
         print(f"Error: '{pdf_path}' not found.")
@@ -96,12 +107,17 @@ def parse_pg_pdf(pdf_path, excel_path):
         if line.startswith('---') or line.startswith('Legends') or not data_started:
             continue
 
-        # Match: SrNo SML FormNo rest...
-        header_match = re.match(r'^\s*(\d+)\s+(\d+(?:\.\d+)?)\s+(\d{9})\s+(.*)', line)
+        # Match: SrNo [I-/IB-] SML FormNo rest...
+        # I-  = inservice with incentive marks
+        # IB- = inservice without incentive marks
+        header_match = re.match(r'^\s*(\d+)(IB?\s*-)?\s*(\d+(?:\.\d+)?)\s+(\d{9})\s+(.*)', line)
         if not header_match:
             continue
 
-        sr_no, sml, form_no, rest = header_match.groups()
+        sr_no = header_match.group(1)
+        sml = header_match.group(3)
+        form_no = header_match.group(4)
+        rest = header_match.group(5).strip()
         rest = rest.strip()
 
         # --- Choice Not Available ---
@@ -110,6 +126,7 @@ def parse_pg_pdf(pdf_path, excel_path):
             name, category = extract_name_category(name_cat)
             extracted_data.append({
                 "Sr. No.": int(sr_no),
+
                 "SML": sml,
                 "Form No.": form_no,
                 "Name": name,
@@ -128,6 +145,7 @@ def parse_pg_pdf(pdf_path, excel_path):
             disq_reason = "Disqualified" + rest.split("Disqualified", 1)[1].strip()
             extracted_data.append({
                 "Sr. No.": int(sr_no),
+
                 "SML": sml,
                 "Form No.": form_no,
                 "Name": name,
@@ -139,8 +157,9 @@ def parse_pg_pdf(pdf_path, excel_path):
             })
             continue
 
-        # --- Normal row: anchor on subject code XXXXS : SUBJECT ---
-        subj_match = re.search(r'(\d{4}S)\s*:\s*([A-Z][A-Z\s&/]+?)(?=\s{2,}|$)', rest)
+        # --- Normal row: anchor on subject code XXXX[S/I/N] : SUBJECT ---
+        # Suffix S=regular, I=in-service, N=NRI
+        subj_match = re.search(r'(\d{4}[A-Z])\s*:\s*([A-Z][A-Z\s&/.()\-]+?)(?=\s{2,}|$)', rest)
         if not subj_match:
             continue
 
