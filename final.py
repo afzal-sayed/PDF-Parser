@@ -193,6 +193,13 @@ def parse_student_list_to_excel(pdf_path, excel_path):
                     quota_part = re.sub(r'\s+', ' ', quota_part) if quota_part else ""
                     quota = quota_part if quota_part else "OPEN"
                     quota = cleanup_quota(quota)
+                    # Strip trailing status markers from college name (e.g. "RAP AC MUMBAI(Ret.)")
+                    # and append them to the quota field where they belong.
+                    college_status = re.search(r'((?:\([A-Za-z./ ]+\))+)\s*$', college_name)
+                    if college_status:
+                        suffix = college_status.group(1).strip()
+                        college_name = college_name[:college_status.start()].strip()
+                        quota = (quota + " " + suffix).strip()
                 else:
                     # If no college code found, treat entire rest as category/quota
                     cat, quota_part = extract_category_quota(rest_of_line)
