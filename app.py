@@ -8,6 +8,7 @@ import os
 import tempfile
 from dotenv import load_dotenv
 from flask import Flask, render_template, request, send_file, jsonify
+from werkzeug.utils import secure_filename
 from final import parse_student_list_to_excel
 from parse_pg import parse_pg_pdf
 
@@ -31,8 +32,9 @@ def upload():
         return jsonify({'error': 'No file uploaded'}), 400
 
     pdf_file = request.files['pdf']
+    safe_filename = secure_filename(pdf_file.filename)
 
-    if not pdf_file.filename.lower().endswith('.pdf'):
+    if not safe_filename or not safe_filename.lower().endswith('.pdf'):
         return jsonify({'error': 'Please upload a PDF file'}), 400
 
     exam_type = request.form.get('type', 'ug').lower()
@@ -40,8 +42,8 @@ def upload():
         return jsonify({'error': 'Invalid exam type. Must be "ug" or "pg"'}), 400
 
     with tempfile.TemporaryDirectory() as tmp_dir:
-        pdf_path = os.path.join(tmp_dir, pdf_file.filename)
-        base_name = os.path.splitext(pdf_file.filename)[0]
+        pdf_path = os.path.join(tmp_dir, safe_filename)
+        base_name = os.path.splitext(safe_filename)[0]
         excel_path = os.path.join(tmp_dir, f"{base_name}_Parsed.xlsx")
 
         pdf_file.save(pdf_path)
