@@ -1,18 +1,29 @@
 # Maharashtra NEET Selection List Parser
 
-A web app that parses Maharashtra NEET UG selection list PDFs and exports the data as a clean, structured Excel file.
+A web app that parses Maharashtra NEET **UG and PG** selection list PDFs and exports the data as clean, structured Excel files.
 
-Built for the specific format published by the Maharashtra state authority — extracts all student records including Sr. No., AIR, NEET Roll No., CET Form No., Name, Gender, Category, Quota, College Code, and College Name.
+Built for the specific formats published by the Maharashtra state authority (SCET Cell / MUHS / ARA) — supports all rounds including stray vacancy rounds.
 
 ---
 
 ## Features
 
 - Drag-and-drop or browse PDF upload
+- Supports both **NEET UG** (AYUSH courses) and **NEET PG** (MD/MS/Diploma) selection lists
 - Parses thousands of records in seconds
 - Downloads a formatted `.xlsx` file instantly
 - Light / dark theme toggle
 - Works locally or deployed on Vercel
+
+---
+
+## Output Columns
+
+### UG Parser (`final.py`) — 10 columns
+`Sr. No. | AIR | NEET Roll No. | CET Form No. | Name | Gender | Category | Quota | College Code | College Name`
+
+### PG Parser (`parse_pg.py`) — 13 columns
+`Sr. No. | SML | I/IB | Form No. | Name | Category | Subject Code | Subject | College | Place | Quota | Remarks | Remarks (Combined)`
 
 ---
 
@@ -44,7 +55,7 @@ Then open **http://127.0.0.1:5000** if the browser doesn't open automatically.
 pip install -r requirements.txt
 ```
 
-Create a `.env` file (or copy from the example):
+Create a `.env` file (optional):
 
 ```env
 MAX_UPLOAD_MB=500
@@ -53,8 +64,24 @@ MAX_UPLOAD_MB=500
 Start the server:
 
 ```bash
-python app.py        # Linux / macOS
-python app.py        # Windows
+python app.py
+```
+
+---
+
+## Run Parsers Standalone
+
+```bash
+# Parse a specific PDF directly (no server needed)
+python3 -c "
+from parse_pg import parse_pg_pdf
+parse_pg_pdf('path/to/selection_list.pdf', 'output.xlsx')
+"
+
+python3 -c "
+from final import parse_student_list_to_excel
+parse_student_list_to_excel('path/to/selection_list.pdf', 'output.xlsx')
+"
 ```
 
 ---
@@ -73,8 +100,6 @@ python app.py        # Windows
 2. Set the upload limit env var: `vercel env add MAX_UPLOAD_MB` → enter `4`
 3. Deploy: `vercel --prod`
 
-See `.env.vercel` for reference values.
-
 ---
 
 ## Project Structure
@@ -84,28 +109,36 @@ parser/
 ├── api/
 │   └── index.py          # Vercel serverless entry point
 ├── templates/
-│   └── index.html        # Frontend UI
-├── app.py                # Flask application
-├── final.py              # PDF parsing & Excel export logic
+│   └── index.html        # Frontend UI (drag-and-drop, UG/PG toggle)
+├── app.py                # Flask app; /upload dispatches to UG or PG parser
+├── final.py              # UG parser (parse_student_list_to_excel)
+├── parse_pg.py           # PG parser (parse_pg_pdf)
 ├── requirements.txt      # Python dependencies
 ├── vercel.json           # Vercel deployment config
-├── .env                  # Local environment variables
-├── .env.vercel           # Vercel env variable reference
 ├── install.bat / .sh     # Dependency installer scripts
 └── start.bat / .sh       # Server launcher scripts
 ```
 
 ---
 
-## Supported PDF Format
+## Supported PDF Formats
 
-Designed for the **Maharashtra NEET UG selection list** format:
+Text-layer PDFs only — scanned/image-based PDFs are not supported.
 
+### NEET UG (AYUSH courses)
+Maharashtra NEET UG selection lists — all rounds (1st through Stray Vacancy):
 ```
 Sr. No. | AIR | NEET Roll No. | CET Form No. | Name | G | Category | Quota | Code | College
 ```
 
-Image-based (scanned) PDFs are not supported — the PDF must have a text layer.
+### NEET PG (MD/MS/Diploma)
+Maharashtra NEET PG selection lists — all rounds (1st, 3rd, Stray Vacancy 1 & 2):
+```
+SrNo | [I-/IB-] | SML | FormNo | Name [Category] | SubjectCode : Subject | College | Place | Quota
+```
+- `I-` prefix = inservice candidate with incentive marks
+- `IB-` prefix = inservice candidate without incentive marks
+- Subject code suffix: `S`=regular seat, `I`=in-service seat, `N`=NRI seat
 
 ---
 
