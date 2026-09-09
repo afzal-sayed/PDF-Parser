@@ -36,6 +36,10 @@ else
     echo " [OK] .env already exists"
 fi
 
+# Configure git hooks
+git config core.hooksPath .githooks
+echo " [OK] Configured git hooksPath"
+
 echo ""
 echo " ============================================"
 echo "  Setup complete! Run ./start.sh to launch."

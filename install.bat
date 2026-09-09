@@ -43,6 +43,10 @@ if not exist ".env" (
     echo  [OK] .env already exists
 )
 
+:: Configure git hooks
+git config core.hooksPath .githooks
+echo  [OK] Configured git hooksPath
+
 echo.
 echo  ============================================
 echo   Setup complete! Run start.bat to launch.
