@@ -75,11 +75,14 @@ This is a Flask web app that parses Maharashtra NEET selection list PDFs and exp
 ## Parser Details
 
 **UG (`final.py`):**
-- Output columns: `Sr. No., AIR, NEET Roll No., CET Form No., Name, Gender, Category, Quota, College Code, College Name` (10 cols)
-- Data rows trigger on `"Sr. AIR NEET"` header line, then match regex: `^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\$?[A-Z\s.]+?)\s+([MF])\s+(.*)`
+- Output columns: `Sr. No., AIR, NEET Roll No., CET Form No., Name, Gender, Category, Quota, College Code, College Name, Earmark, Course, City` (13 cols)
+- Data rows trigger on a whitespace-tolerant `Sr.\s+AIR\s+NEET` / `Roll No.\s+No.` regex (not a literal substring — column widths vary between selection-list variants, e.g. MBBS/BDS lists pad `Name` wider than AYUSH lists)
 - `$` prefix on names = minority marker (stripped before saving)
 - College identified by `DDDD: College Name` pattern
 - Status markers `(Ret.)`, `(No Pref.)`, `(No Change)` are stripped from College Name and appended to Quota
+- `Earmark` is peeled off the end of the cleaned-up quota string by `extract_earmark()`: `(EMD)`/`(EMR)` (per the Legends line: EarMarking Donor/Receiver), `MINO` (minority), `OrphanC` (orphan candidate). Defaults to `""` — some rounds never contain one. `(W)` (women's quota) is NOT an earmark and stays in `Quota`.
+- `Course` is derived from the college code's leading digit: `1xxx` = Medical College → `MBBS`, `2xxx` = Dental College → `BDS` (confirmed against `GMC`/`MC` vs `GDC`/`DC` college-name abbreviations). `"N/A"` when no college code was found (e.g. `Choice Not Available` rows) or the code is outside those two ranges (e.g. `3xxx` = AYUSH colleges — BAMS/BHMS/BUMS isn't derivable from the code range alone).
+- `City` is the last whitespace-separated token of `College Name` (e.g. `GDC CH. SAMBHAJINAGAR` → `SAMBHAJINAGAR`), not the full place name.
 
 **PG (`parse_pg.py`):**
 - Output columns: `Sr. No., SML, I/IB, Form No., Name, Category, Subject Code, Subject, College, Place, Quota, Remarks, Remarks (Combined)` (13 cols)
@@ -97,9 +100,11 @@ This is a Flask web app that parses Maharashtra NEET selection list PDFs and exp
 ## Gotchas
 
 - **UG `known_categories` is inside `extract_category_quota()`** — defined at line ~109 of `final.py`, not at module level. Extend it there, not at the top of the file like PG's `KNOWN_CATEGORIES`.
-- **`AIOPEN` quota (UG Round 4+)** — All India Open seats appear as category `AIOPEN` with quota `(A.I.)`. Parsers treat this as distinct from `OPEN`; don't merge them.
+- **`AIOPEN` quota (UG Round 4+)** — All India Open seats appear as **quota** `AIOPEN (A.I)` (Category stays blank or whatever real reservation category the candidate has); it was never actually a category value despite what this file used to say here — that stale claim was itself a symptom of the `known_categories`/first-word-as-category bug described below. Don't add `AIOPEN` to `known_categories`.
 - **`graphify-out/` is untracked** — graph files are gitignored. Run `/graphify . --update` after modifying `final.py` or `parse_pg.py` to keep the RAG graph current.
 - **PG status markers appear in two positions** — sometimes before `(Ret.)`, sometimes hidden behind it. The two-pass `trailing_match` in `parse_right_side` is intentional; don't simplify it to one pass.
+- **Fixed: UG `Category`/`Quota` split used to mis-fire whenever the quota text had no real reservation-category prefix** — e.g. raw `OPEN (W)` (no category, general/open candidate) was split into `Category="OPEN"`, `Quota="(W)"` instead of `Category=""`, `Quota="OPEN (W)"`. Root cause was `"OPEN"` in `known_categories` plus a "first word as category" fallback, both of which treated a bare quota-base token as a category. `extract_category_quota()` now only ever treats a token as category if it's in `known_categories` (a curated list of real reservation-category codes, never quota/seat-type words like `OPEN`/`HOPEN`/`DEF1..3`/`I.Q.`/`AIOPEN`) — there is no fallback. Multiple category flags can appear either glued with no space (`"SEBCHA"` = SEBC+HA) or space-separated (`"OBC HA"`, `"OBC D1"`); both are peeled into one combined category, but a base code repeating after a space (e.g. the second `SEBC` in `"SEBC SEBC"`) is correctly left as Quota, not re-peeled as category — see `modifier_categories` in `final.py` for which flags are safe to keep peeling across a space.
+- **Fixed: UG row regex used to under-capture names containing a standalone middle initial** (e.g. `"AMAN M SHARIF SAGRI"`, `"SUSHRUT M MORGAONKAR"`) — the lazy `(\$?[A-Z\s.]+?)` name group stopped at the *first* bare `M`/`F` token, mistaking the initial for the Gender field and leaking the rest of the name into Category/Quota (e.g. `Quota` ending up `"RATHOD M VJA Choice Not Available"`). Worse, for some names this also **misread Gender** (e.g. `"ISHITA M VASTRAKAR"`, an `F`, was read as `M`). Fixed by making the name group greedy (`(\$?[A-Z\s.]+)`) so it captures up to the *last* bare `M`/`F` — the real Gender field, since category/quota vocabulary never contains a standalone single-letter token. Confirmed zero regressions and zero remaining leaks across all 6 sample PDFs (~158k rows).
 
 ## Running Parsers on Specific PDFs
 

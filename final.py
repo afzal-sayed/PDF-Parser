@@ -75,7 +75,9 @@ def parse_student_list_to_excel(pdf_path, excel_path):
             continue
             
         # Check if we've reached the data section
-        if "Sr.    AIR     NEET" in line or "No.            Roll No." in line:
+        # Whitespace-tolerant: column widths vary across selection-list variants
+        # (e.g. MBBS/BDS lists pad "Name" wider than AYUSH lists).
+        if re.search(r'Sr\.\s+AIR\s+NEET', line) or re.search(r'Roll No\.\s+No\.', line):
             data_started = True
             continue
             
@@ -89,8 +91,10 @@ def parse_student_list_to_excel(pdf_path, excel_path):
             
         # Try to match student data line
         # Pattern: Sr.No Air NeRollNo CETFormNo Name Gender Category QuotaInfo CollegeCode CollegeName
-        # Use a more flexible regex that can handle the specific format
-        match = re.match(r'^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\$?[A-Z\s.]+?)\s+([MF])\s+(.*)', line)
+        # Name is greedy, not lazy: some names contain a standalone middle
+        # initial ("AMAN M SHARIF SAGRI"), which a lazy match stops at,
+        # mistaking the initial for the trailing Gender field.
+        match = re.match(r'^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\$?[A-Z\s.]+)\s+([MF])\s+(.*)', line)
 
         if match:
             sr_no, air, neet_roll, cet_form, name, gender, rest_of_line = match.groups()
@@ -102,52 +106,87 @@ def parse_student_list_to_excel(pdf_path, excel_path):
             # Default values
             category = "N/A"
             quota = "N/A"
+            earmark = ""
             college_code = "N/A"
             college_name = "N/A"
+            course = "N/A"
+            city = "N/A"
 
-            # Known categories (in order of specificity to avoid confusion)
+            # Known reservation-category codes (the "Cat." column) -- NOT
+            # quota/seat-type tokens like OPEN, HOPEN, DEF1/2/3, I.Q., EMOBC,
+            # which only ever appear in Quota, never Cat. "VJ" is deliberately
+            # not listed (unobserved; would wrongly prefix-match "VJA").
             known_categories = [
-                "OPEN", "OBC", "SC", "ST", "EWS", "NT1", "NT2", "NT3", "VJ", "VJA", "NTB", "NTC", "NTD", "SBC", "MIN", "DEF1", "DEF2", "DEF3", "PWD", "EBC"
+                "ORP-A", "ORP-B", "ORP-C",
+                "SEBC", "SOBC",
+                "OBC", "EWS", "NT1", "NT2", "NT3", "VJA", "NTB", "NTC", "NTD",
+                "MIN", "PWD", "EBC", "SBC", "MKB", "NRI",
+                "HA", "D1", "D2", "D3", "SC", "ST",
             ]
+
+            # Modifier-only flags: they always combine with a base category
+            # (or stand alone) but never equal a Quota value themselves, so
+            # peeling continues through them even when space-separated from
+            # the token before (e.g. "OBC HA", "OBC D1"). Contrast with base
+            # codes like OBC/SC/SEBC, which a candidate can also be *allotted
+            # a seat under* -- a second, space-separated occurrence of one of
+            # those (e.g. "SEBC SEBC") is the Quota field, not a second
+            # category flag, and must NOT be peeled again.
+            modifier_categories = {"HA", "D1", "D2", "D3", "PWD", "MKB", "NRI", "ORP-A", "ORP-B", "ORP-C"}
 
             def extract_category_quota(text):
                 """
-                Extract category and quota more intelligently.
-                Categories are followed by quota information like (W), (EMD), (HA), etc.
-                Format is typically: CATEGORY [QUOTA_INFO] [QUOTA_INFO] ...
-                Handles cases like: OPEN (EMD), OPEN (W), OPEN (W) (EMD), etc.
+                Split a "Cat. Quota" blob into (category, quota).
+
+                Only tokens in `known_categories` are ever treated as
+                category; everything else -- including a lone "OPEN", which
+                used to be misclassified as a category -- is quota, even
+                when it's the very first word. There is no generic "first
+                word as category" fallback: that used to turn e.g.
+                "OPEN (W)" (no category, general/open candidate) into
+                category "OPEN", quota "(W)" instead of category "", quota
+                "OPEN (W)". Multiple category flags are sometimes glued with
+                no separating space (e.g. "SEBCHA" = SEBC + HA, "D1HA" after
+                a space-separated base like "OBC D1HA") and sometimes fully
+                space-separated (e.g. "OBC HA", "OBC D1") -- both are peeled
+                into one combined category string, preserving whichever
+                separator (or none) the PDF actually used. After crossing a
+                space, only a `modifier_categories` token is peeled further
+                (e.g. the "HA" in "OBC HA"); a *base* code appearing again
+                after a space (e.g. the second "SEBC" in "SEBC SEBC") is the
+                Quota field, not a repeated category flag.
                 """
                 text = text.strip()
-                
-                # Try to match the first known category
-                matched_category = None
-                for cat in known_categories:
-                    # Check if text starts with category (with or without space after)
-                    if text == cat:
-                        # Just the category, no quota
-                        return cat, ""
-                    elif text.startswith(cat + " "):
-                        # Category followed by space and more text
-                        matched_category = cat
-                        remaining = text[len(cat):].strip()
-                        # Clean up any extra spaces before parentheses
-                        remaining = re.sub(r'\s+', ' ', remaining)
-                        return matched_category, remaining
-                    elif text.startswith(cat + "("):
-                        # Category directly followed by parentheses without space (e.g., "OPEN(W)")
-                        matched_category = cat
-                        remaining = text[len(cat):].strip()
-                        return matched_category, remaining
-                
-                # Fallback: first word as category
-                parts = text.split(maxsplit=1)
-                if len(parts) == 2:
-                    # Clean up spaces in the remaining part
-                    return parts[0], re.sub(r'\s+', ' ', parts[1])
-                elif len(parts) == 1:
-                    return parts[0], ""
-                else:
-                    return "N/A", ""
+                if not text:
+                    return "", ""
+
+                category = ""
+                remaining = text
+                crossed_space = False
+                while remaining:
+                    matched = next(
+                        (cat for cat in known_categories
+                         if remaining == cat or remaining.startswith(cat)),
+                        None
+                    )
+                    if not matched:
+                        break
+                    if crossed_space:
+                        if matched not in modifier_categories:
+                            break
+                        category += " "
+                    category += matched
+                    remaining = remaining[len(matched):]
+                    if not remaining:
+                        break
+                    if remaining[0] != ' ':
+                        crossed_space = False
+                        continue  # glued to more letters -- keep peeling
+                    remaining = remaining.lstrip()
+                    crossed_space = True
+
+                quota_part = re.sub(r'\s+', ' ', remaining).strip()
+                return category, quota_part
 
             def cleanup_quota(quota_str):
                 """
@@ -168,8 +207,34 @@ def parse_student_list_to_excel(pdf_path, excel_path):
                 
                 # Normalize multiple spaces
                 quota_str = re.sub(r'\s+', ' ', quota_str).strip()
-                
+
                 return quota_str
+
+            # Earmark tokens (per the PDF Legends line: EMD = EarMarking Donor,
+            # EMR = EarMarking Receiver) plus MINO (minority) and OrphanC (orphan
+            # candidate) are distinct from the quota itself and from the "(W)"
+            # women's-quota marker, which must stay part of Quota.
+            earmark_token_re = re.compile(r'\s*(\(EMD\)|\(EMR\)|MINO|OrphanC)\s*$')
+
+            def extract_earmark(quota_str):
+                """
+                Peel any trailing earmark tokens off a cleaned-up quota string.
+                Returns (quota_without_earmark, earmark) with earmark == "" when
+                none are present -- some selection lists never contain one.
+                """
+                if not quota_str or quota_str == "N/A":
+                    return quota_str, ""
+
+                tokens = []
+                remaining = quota_str
+                while True:
+                    m = earmark_token_re.search(remaining)
+                    if not m:
+                        break
+                    tokens.insert(0, m.group(1))
+                    remaining = remaining[:m.start()].rstrip()
+
+                return remaining.strip(), " ".join(tokens)
 
             if "Choice Not Available" in rest_of_line:
                 # Handle case where no college is assigned
@@ -178,8 +243,9 @@ def parse_student_list_to_excel(pdf_path, excel_path):
                 category = cat
                 # Clean up quota formatting - normalize multiple spaces
                 quota_part = re.sub(r'\s+', ' ', quota_part) if quota_part else ""
+                quota_part = cleanup_quota(quota_part) if quota_part else ""
+                quota_part, earmark = extract_earmark(quota_part) if quota_part else ("", "")
                 quota = (quota_part + " Choice Not Available").strip() if quota_part else "Choice Not Available"
-                quota = cleanup_quota(quota)
             else:
                 # Handle case where college is assigned
                 college_match = re.search(r'(\d{4})\s*:\s*(.*?)$', rest_of_line)
@@ -193,6 +259,8 @@ def parse_student_list_to_excel(pdf_path, excel_path):
                     quota_part = re.sub(r'\s+', ' ', quota_part) if quota_part else ""
                     quota = quota_part if quota_part else "OPEN"
                     quota = cleanup_quota(quota)
+                    quota, earmark = extract_earmark(quota)
+                    quota = quota or "OPEN"
                     # Strip trailing status markers from college name (e.g. "RAP AC MUMBAI(Ret.)")
                     # and append them to the quota field where they belong.
                     college_status = re.search(r'((?:\([A-Za-z./ ]+\))+)\s*$', college_name)
@@ -200,6 +268,18 @@ def parse_student_list_to_excel(pdf_path, excel_path):
                         suffix = college_status.group(1).strip()
                         college_name = college_name[:college_status.start()].strip()
                         quota = (quota + " " + suffix).strip()
+                    # College code range: 1xxx/12xx = Medical College (MBBS),
+                    # 2xxx = Dental College (BDS) -- confirmed against Maharashtra
+                    # CET Cell code numbering (GMC/MC vs GDC/DC abbreviations).
+                    if college_code.startswith("1"):
+                        course = "MBBS"
+                    elif college_code.startswith("2"):
+                        course = "BDS"
+                    else:
+                        # e.g. 3xxx = AYUSH (BAMS/BHMS/BUMS) colleges -- not
+                        # derivable from the code range alone.
+                        course = "N/A"
+                    city = college_name.split()[-1] if college_name and college_name != "N/A" else "N/A"
                 else:
                     # If no college code found, treat entire rest as category/quota
                     cat, quota_part = extract_category_quota(rest_of_line)
@@ -208,6 +288,8 @@ def parse_student_list_to_excel(pdf_path, excel_path):
                     quota_part = re.sub(r'\s+', ' ', quota_part) if quota_part else ""
                     quota = quota_part if quota_part else "OPEN"
                     quota = cleanup_quota(quota)
+                    quota, earmark = extract_earmark(quota)
+                    quota = quota or "OPEN"
             
             # Append the structured data
             extracted_data.append({
@@ -220,7 +302,10 @@ def parse_student_list_to_excel(pdf_path, excel_path):
                 "Category": category,
                 "Quota": quota,
                 "College Code": college_code,
-                "College Name": college_name
+                "College Name": college_name,
+                "Earmark": earmark,
+                "Course": course,
+                "City": city
             })
             
             # Print progress every 1000 records
